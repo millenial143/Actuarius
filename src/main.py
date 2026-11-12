@@ -2,6 +2,9 @@ import modules.agent as agent
 import modules.database as db
 import modules.whisper_stt as whisp
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ================= НАСТРОЙКИ =================
 # Путь к папке с wav файлами (измените на свой)
@@ -38,39 +41,59 @@ def main():
     # ================= AGENT PART ===========
 
     for note in db.list_unprocessed(DATABASE_PATH, "txt"):
-        with open(f"{TXT_FOLDER_PATH}/{note}", "r") as file:
-            note_text = file.read()
-            # 0. Исправление ошибок и структурирование текста
-            note_text = agent.fix_note(note_text)
+        try:
+            with open(f"{TXT_FOLDER_PATH}/{note}", "r", encoding="utf-8") as file:
+                note_text = file.read()
+                # 0. Исправление ошибок и структурирование текста
+                note_text = agent.fix_note(note_text)
 
-            # 1. Определение типа
-            type = ""
-            if note_text:
-                type = agent.indentify_type(note_text)
+                # 1. Определение типа
+                type = ""
+                if note_text:
+                    type = agent.indentify_type(note_text)
 
-                # 2. Определение тем
-                #  тут потом будет обращение к базе тем
-                themes = ["Шумеры", "Электромагнетизм", "Minecraft", "Комнатные растения", "Рефлексия", "Проекты", "Использование LLM", "Чайник Рассела"]
-                themes += [f.name[:-3] for f in Path(f"{OBSIDIAN_FOLDER_PATH}/Links").iterdir() if f.is_file()]
-                print(themes)
-                if type :
-                    themes = agent.indentify_themes(note_text, themes)
+                    # 2. Определение тем
+                    #  тут потом будет обращение к базе тем
+                    themes = ["Шумеры", "Электромагнетизм", "Minecraft", "Комнатные растения", "Рефлексия", "Проекты", "Использование LLM", "Чайник Рассела"]
+                    themes += [f.name[:-3] for f in Path(f"{OBSIDIAN_FOLDER_PATH}/Links").iterdir() if f.is_file()]
                     print(themes)
-                    note_text = "#### Type: " + "#" + f"{type}\n\n" + note_text
-                # 3. Генерация наименования заметки
-                    note_name = agent.generate_name(note_text)
-                    note_date = agent.indentify_date(note)
-                    if type == "diary" and note_date and note_name:
-                        note_name += f" {note_date}"
-                    note_text = f"# {note_name}\n\n" + note_text
+                    if type :
+                        themes = agent.indentify_themes(note_text, themes)
+                        print(themes)
+                        note_text = "#### Type: " + "#" + f"{type}\n\n" + note_text
+                    # 3. Генерация наименования заметки
+                        note_name = agent.generate_name(note_text)
+                        note_date = agent.indentify_date(note)
+                        if type == "diary" and note_date and note_name:
+                            note_name += f" {note_date}"
+                        base_note_name = note_name
+                        suffix = 2
+                        note_path = Path(OBSIDIAN_FOLDER_PATH) / "Notes" / f"{note_name}.md"
+                        while note_path.exists():
+                            note_name = f"{base_note_name} ({suffix})"
+                            note_path = Path(OBSIDIAN_FOLDER_PATH) / "Notes" / f"{note_name}.md"
+                            suffix += 1
+                        note_text = f"# {note_name}\n\n" + note_text
 
-                # 4. Добавление ссылок и метаданных
-                    note_text += "\n\n\n#### Links:\n"
-                    if themes:
-                        for theme in themes:
-                            note_text += f"[[{theme}]]\n"
+                    # 4. Добавление ссылок и метаданных
+                        note_text += "\n\n\n#### Links:\n"
+                        if themes:
+                            for theme in themes:
+                                note_text += f"[[{theme}]]\n"
+
+                        # тут еще надо добавить имя аудиофайла, txt файла, дату
+                        note_text += f"\n\nAudio File name: {note[:-4]}.wav\n"
+                        note_text += f"Text File name: {note}\n"
+                        note_text += f"Date: {note_date}\n"
+
+                    # 5. Сохраняем файл
+                        with open(note_path, "x", encoding="utf-8") as f:
+                            f.write(note_text)
+
+                        # Обратные ссылки добавляем только после сохранения заметки.
+                        for theme in themes or []:
                             try:
-                                with open(f"{OBSIDIAN_FOLDER_PATH}/Links/{theme}.md", 'x') as file:
+                                with open(f"{OBSIDIAN_FOLDER_PATH}/Links/{theme}.md", 'x', encoding="utf-8") as file:
                                     file.write("#link")
                                     print(f"Ссылка {theme} создана!")
                                     file.write(f"\n[[{note_name}]]")
@@ -78,20 +101,13 @@ def main():
 
                             except FileExistsError:
                                 print(f"Ссылка {theme} уже есть!")
-                                with open(f"{OBSIDIAN_FOLDER_PATH}/Links/{theme}.md", 'w') as file:
+                                with open(f"{OBSIDIAN_FOLDER_PATH}/Links/{theme}.md", 'a', encoding="utf-8") as file:
                                     file.write(f"\n[[{note_name}]]")
                                     print(f"Ссылка {theme} дополнена!")
 
-                    # тут еще надо добавить имя аудиофайла, txt файла, дату
-                    note_text += f"\n\nAudio File name: {note[:-4]}.wav\n"
-                    note_text += f"Text File name: {note}\n"
-                    note_text += f"Date: {note_date}\n"
-
-                # 5. Сохраняем файл
-                    with open(f"{OBSIDIAN_FOLDER_PATH}/Notes/{note_name}.md", "w", encoding="utf-8") as f:
-                        f.write(note_text)
-
-                    db.mark_processed(DATABASE_PATH, note, "txt")
+                        db.mark_processed(DATABASE_PATH, note, "txt")
+        except Exception:
+            logger.exception("Ошибка обработки заметки %s; переходим к следующей", note)
 
     # ========================================
 
